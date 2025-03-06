@@ -10,7 +10,8 @@ chatbot = CodeExplorerChatbot(CODEBASE_PATH)
 
 # Define initial prompt with file structure and instructions
 initial_prompt = (
-    "You're a helpful AI to help user exploring a new codebase.\n"
+    "You're a helpful AI chatbot to help user exploring a new codebase.\n"
+    "You should be able to anwser general conversation. If necessary, you can use following tools."
     "Tool available:\n"
     "1. Use 'get_file_structure' to understand the codebase file structure.\n"
     "2. Use 'open_files' to inspect up to {batch_size} files each time from the file structure.\n"
@@ -28,15 +29,16 @@ st.write("Explore your codebase with AI assistance")
 
 # Initialize session state for conversation history
 if "messages" not in st.session_state:
-    st.session_state.messages = []
-    # Initialize with the first system message
-    st.session_state.messages.append({"role": "system", "content": initial_prompt})
+    initial_system_msg = HumanMessage(content=initial_prompt)
+    st.session_state.messages = [{"role": "system", "content": initial_prompt}]
     st.session_state.all_files_opened = []
     st.session_state.input_state = {
-        "messages": [HumanMessage(content=initial_prompt)],
+        "messages": [initial_system_msg],
         "all_files_opened": []
     }
     st.session_state.config = {"configurable": {"thread_id": "1"}}
+
+
 
 # Display conversation history
 for msg in st.session_state.messages:
@@ -56,7 +58,17 @@ with st.sidebar:
     - Read file contents
     - Ask questions about code
     """)
-    
+    # Add to your Streamlit app
+    if st.checkbox("Show Debug Info"):
+        st.subheader("Debug Information")
+        st.write("Messages in input_state:", len(st.session_state.input_state["messages"]))
+        st.write("Messages in UI history:", len(st.session_state.messages))
+        st.write("Files opened count:", len(st.session_state.all_files_opened))
+        
+        # Show last message content
+        if st.session_state.input_state["messages"]:
+            st.text("Last message in state:")
+            st.code(str(st.session_state.input_state["messages"][-1])[:200] + "...")
     # Display files explored in the sidebar
     if st.session_state.all_files_opened:
         st.header("📁 Files Explored")
@@ -90,21 +102,21 @@ with st.sidebar:
     - Inquire about specific files or components
     """)
     
-    # Add a debug section to help troubleshoot
-    if st.checkbox("Show Debug Info"):
-        st.subheader("Debug Information")
-        st.write("Messages in input_state:", len(st.session_state.input_state["messages"]))
-        st.write("Messages in UI history:", len(st.session_state.messages))
+    # # Add a debug section to help troubleshoot
+    # if st.checkbox("Show Debug Info"):
+    #     st.subheader("Debug Information")
+    #     st.write("Messages in input_state:", len(st.session_state.input_state["messages"]))
+    #     st.write("Messages in UI history:", len(st.session_state.messages))
         
-        # Add a button to reset the conversation
-        if st.button("Reset Conversation"):
-            st.session_state.messages = [{"role": "system", "content": initial_prompt}]
-            st.session_state.all_files_opened = []
-            st.session_state.input_state = {
-                "messages": [HumanMessage(content=initial_prompt)],
-                "all_files_opened": []
-            }
-            st.rerun()
+    #     # Add a button to reset the conversation
+    #     if st.button("Reset Conversation"):
+    #         st.session_state.messages = [{"role": "system", "content": initial_prompt}]
+    #         st.session_state.all_files_opened = []
+    #         st.session_state.input_state = {
+    #             "messages": [HumanMessage(content=initial_prompt)],
+    #             "all_files_opened": []
+    #         }
+    #         st.rerun()
 
 
 # Get user input
@@ -119,15 +131,26 @@ if user_input := st.chat_input("Ask about the codebase..."):
     
     # Get response from chatbot
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()        
-        # Define async function to stream response
+        message_placeholder = st.empty()
         async def stream_response():
             full_response = ""
+            updated_state = None
+            
+            # Create a copy of the current state to send to LangGraph
+            current_state = {
+                "messages": st.session_state.input_state["messages"].copy(),
+                "all_files_opened": st.session_state.all_files_opened.copy()
+            }
+            
             async for msg, metadata in chatbot.app.astream(
-                st.session_state.input_state,
+                current_state,
                 st.session_state.config,
                 stream_mode="messages",
             ):
+                # Save the updated state from metadata
+                if metadata and "state" in metadata:
+                    updated_state = metadata["state"]
+                
                 if msg.content:
                     # Handle case where content is a list of chunks
                     if isinstance(msg.content, list):
@@ -146,8 +169,15 @@ if user_input := st.chat_input("Ask about the codebase..."):
             # Add assistant response to chat history
             st.session_state.messages.append({"role": "assistant", "content": full_response})
             
-            # Update all_files_opened in session state
-            st.session_state.all_files_opened = st.session_state.input_state.get("all_files_opened", [])
+            # CRITICAL: Update the session state with the complete state from LangGraph
+            if updated_state:
+                # Replace the entire input state with the latest from LangGraph
+                st.session_state.input_state = updated_state
+                # Also update the all_files_opened list for sidebar display
+                st.session_state.all_files_opened = updated_state.get("all_files_opened", [])
+            else:
+                logger.warning("No updated state received from LangGraph!")
+
         
         # Run the async function
         loop = asyncio.new_event_loop()

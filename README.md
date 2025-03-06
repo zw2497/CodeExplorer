@@ -15,3 +15,4 @@ An AI-powered chatbot that helps developers explore and understand codebases qui
    ```bash
    git clone https://github.com/yourusername/code-explorer-chatbot.git
    cd code-explorer-chatbot
+   streamlit run app.py

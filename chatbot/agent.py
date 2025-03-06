@@ -55,34 +55,12 @@ class CodeExplorerChatbot:
         async def agent(state: ChatState, config) -> ChatState:
             response = await self.llm_with_tools.ainvoke(state["messages"], config)
             return {"messages": state["messages"] + [response], "all_files_opened": state["all_files_opened"]}
-        
-        # Define reflection node
-        async def reflect(state: ChatState, config) -> ChatState:
-            # Create a reflection prompt
-            reflection_prompt = (
-                "Based on the information gathered so far, please:\n"
-                "1. Update your answer to my question\n"
-                "2. Identify what information is still missing,\n"
-                "3. Explain what files should be explored next and why. Keep it efficient and as less as possible because of context limit."
-                "4. No tool usage in current message"
-            )
-            
-            # Add reflection prompt
-            reflection_request = HumanMessage(content=reflection_prompt)
-            
-            # Get reflection from LLM
-            reflection = await self.llm_with_tools.ainvoke(state["messages"] + [reflection_request], config)
-            
-            # Add reflection to messages
-            return {
-                "messages": state["messages"] + [reflection_request, reflection, HumanMessage(content="Continue")], 
-                "all_files_opened": state["all_files_opened"]
-            }
+    
 
         # Define tool execution node
         def execute_tools(state: ChatState) -> ChatState:
-            messages = state["messages"]
-            last_message = messages[-1]  # Last LLM response before placeholder
+            messages = []
+            last_message = state["messages"][-1]  # Last LLM response before placeholder
             if not last_message.tool_calls:
                 return state
             all_files_opened = state["all_files_opened"]
@@ -91,19 +69,28 @@ class CodeExplorerChatbot:
                     file_paths = tool_call["args"].get("file_paths", [])
                     logger.info(f"Opening files: {file_paths}")
                     result = self.tools[1].func(file_paths)
-                    all_files_opened.extend(file_paths)
+                    all_files_opened = all_files_opened + file_paths
                 elif tool_call["name"] == "get_file_structure":
                     result = self.tools[0].func()
                 else:
                     result = f"Unknown tool: {tool_call['name']}"
                 messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+                    # Add a reflection prompt directly after tool execution
+
+            reflection_prompt = (
+                "Based on the information gathered so far, please:\n"
+                "1. Update your answer to the user's question\n"
+                "2. Identify what information is still missing\n"
+                "3. Explain what files should be explored next and why. Keep number of files efficient(as few files as possible).\n"
+            )
+            messages.append(HumanMessage(content=reflection_prompt))
+
             return {"messages": messages, "all_files_opened": all_files_opened}
 
         # Define graph
         workflow = StateGraph(ChatState)
         workflow.add_node("agent", agent)
         workflow.add_node("tools", execute_tools)
-        workflow.add_node("reflect", reflect)
 
         workflow.set_entry_point("agent")
         workflow.add_conditional_edges(
@@ -111,6 +98,5 @@ class CodeExplorerChatbot:
             route_tools,
             {"tools": "tools", END: END}
         )
-        workflow.add_edge("tools", "reflect")
-        workflow.add_edge("reflect", "agent")
+        workflow.add_edge("tools", "agent")
         self.app = workflow.compile(checkpointer=memory)

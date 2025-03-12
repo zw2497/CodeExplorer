@@ -1,17 +1,15 @@
 import streamlit as st
 import asyncio
 from streamlit.runtime.scriptrunner import add_script_run_ctx
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from chatbot import CodeExplorerChatbot
 from config import CODEBASE_PATH, BATCH_SIZE, logger
-
-# Initialize the chatbot
-chatbot = CodeExplorerChatbot(CODEBASE_PATH)
 
 # Define initial prompt with file structure and instructions
 initial_prompt = (
     "You're a helpful AI chatbot to help user exploring a new codebase.\n"
     "You should be able to anwser general conversation. If necessary, you can use following tools."
+    "After each tool use, reflect what to explore next to anwser user's query. if you think it's confident to answer, give final result without tool use."
     "Tool available:\n"
     "1. Use 'get_file_structure' to understand the codebase file structure.\n"
     "2. Use 'open_files' to inspect up to {batch_size} files each time from the file structure.\n"
@@ -27,25 +25,44 @@ initial_prompt = (
 st.title("Code Explorer Chatbot")
 st.write("Explore your codebase with AI assistance")
 
-# Initialize session state for conversation history
-if "messages" not in st.session_state:
-    initial_system_msg = HumanMessage(content=initial_prompt)
-    st.session_state.messages = [{"role": "system", "content": initial_prompt}]
-    st.session_state.all_files_opened = []
-    st.session_state.input_state = {
-        "messages": [initial_system_msg],
-        "all_files_opened": []
-    }
+# Initialize session state for configuration
+if "config" not in st.session_state:
     st.session_state.config = {"configurable": {"thread_id": "1"}}
+    st.session_state.chatbot = CodeExplorerChatbot(CODEBASE_PATH)
 
+# Function to get current state from checkpoint
+def get_current_state():
+    snapshot = st.session_state.chatbot.app.get_state(st.session_state.config)
+    if snapshot and hasattr(snapshot, 'values'):
+        return snapshot.values
+    return {"messages": [], "all_files_opened": []}
 
+# Convert LangChain message to format suitable for UI display
+def convert_message_for_display(msg):
+    if isinstance(msg, SystemMessage):
+        return None  # Skip system messages
+    
+    role = "assistant" if isinstance(msg, AIMessage) else "user"
+    
+    # Extract content based on type
+    if isinstance(msg.content, list):
+        content = "".join(
+            chunk["text"] for chunk in msg.content 
+            if isinstance(chunk, dict) and chunk.get("type") == "text"
+        )
+    else:
+        content = str(msg.content)
+        
+    return {"role": role, "content": content}
 
-# Display conversation history
-for msg in st.session_state.messages:
-    if msg["role"] == "system":
-        continue
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+# Display conversation history from checkpoint
+current_state = get_current_state()
+for msg in current_state.get("messages", []):
+    display_msg = convert_message_for_display(msg)
+    print(display_msg)
+    if display_msg:  # Skip system messages
+        with st.chat_message(display_msg["role"]):
+            st.markdown(display_msg["content"])
 
 # Add sidebar with information and files explored
 with st.sidebar:
@@ -58,21 +75,25 @@ with st.sidebar:
     - Read file contents
     - Ask questions about code
     """)
-    # Add to your Streamlit app
+    
+    # Debug info checkbox
     if st.checkbox("Show Debug Info"):
         st.subheader("Debug Information")
-        st.write("Messages in input_state:", len(st.session_state.input_state["messages"]))
-        st.write("Messages in UI history:", len(st.session_state.messages))
-        st.write("Files opened count:", len(st.session_state.all_files_opened))
+        current_state = get_current_state()
+        st.write("Messages in checkpoint:", len(current_state.get("messages", [])))
+        st.write("Files opened count:", len(current_state.get("all_files_opened", [])))
         
         # Show last message content
-        if st.session_state.input_state["messages"]:
+        if current_state.get("messages"):
             st.text("Last message in state:")
-            st.code(str(st.session_state.input_state["messages"][-1])[:200] + "...")
+            last_msg = current_state["messages"][-1]
+            st.code(str(last_msg)[:200] + "...")
+    
     # Display files explored in the sidebar
-    if st.session_state.all_files_opened:
+    files_opened = get_current_state().get("all_files_opened", [])
+    if files_opened:
         st.header("📁 Files Explored")
-        sorted_files = sorted(set(st.session_state.all_files_opened))
+        sorted_files = sorted(set(files_opened))
         
         # Group files by directory for better organization
         file_tree = {}
@@ -102,82 +123,79 @@ with st.sidebar:
     - Inquire about specific files or components
     """)
     
-    # # Add a debug section to help troubleshoot
-    # if st.checkbox("Show Debug Info"):
-    #     st.subheader("Debug Information")
-    #     st.write("Messages in input_state:", len(st.session_state.input_state["messages"]))
-    #     st.write("Messages in UI history:", len(st.session_state.messages))
-        
-    #     # Add a button to reset the conversation
-    #     if st.button("Reset Conversation"):
-    #         st.session_state.messages = [{"role": "system", "content": initial_prompt}]
-    #         st.session_state.all_files_opened = []
-    #         st.session_state.input_state = {
-    #             "messages": [HumanMessage(content=initial_prompt)],
-    #             "all_files_opened": []
-    #         }
-    #         st.rerun()
-
+    # # Add option to reset conversation
+    # if st.button("Reset Conversation"):
+    #     initial_state = {
+    #         "messages": [SystemMessage(content=initial_prompt)],
+    #         "all_files_opened": []
+    #     }
+    #     st.session_state.chatbot.app.update_state(initial_state, st.session_state.config)
+    #     st.rerun()
 
 # Get user input
 if user_input := st.chat_input("Ask about the codebase..."):
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # Check if this is the first message in the conversation
+    current_state = get_current_state()
+
+    is_first_message = len(current_state.get("messages", [])) == 0
+
+    # Prepare input state - add system message only for first interaction
+    if is_first_message:
+        input_state = {
+            "messages": [
+                SystemMessage(content=initial_prompt),
+                HumanMessage(content=user_input)
+            ]
+        }
+    else:
+        input_state = {
+            "messages": [HumanMessage(content=user_input)]
+        }
+    # Display the user message immediately
     with st.chat_message("user"):
         st.markdown(user_input)
-    
-    # Add to LangGraph input state
-    st.session_state.input_state["messages"].append(HumanMessage(content=user_input))
     
     # Get response from chatbot
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
+        
         async def stream_response():
             full_response = ""
-            updated_state = None
+            # Prepare input for the chatbot
             
-            # Create a copy of the current state to send to LangGraph
-            current_state = {
-                "messages": st.session_state.input_state["messages"].copy(),
-                "all_files_opened": st.session_state.all_files_opened.copy()
-            }
-            
-            async for msg, metadata in chatbot.app.astream(
-                current_state,
-                st.session_state.config,
-                stream_mode="messages",
-            ):
-                # Save the updated state from metadata
-                if metadata and "state" in metadata:
-                    updated_state = metadata["state"]
+            try:
+                # Stream the response
+                async for msg, metadata in st.session_state.chatbot.app.astream(
+                    input_state,
+                    st.session_state.config,
+                    stream_mode="messages",
+                ):
+                    # Process message content based on its type
+                    if hasattr(msg, 'content'):
+                        # Handle content that might be a list of chunks or a string
+                        if isinstance(msg.content, list):
+                            for chunk in msg.content:
+                                if isinstance(chunk, dict) and chunk.get('type') == 'text':
+                                    full_response += chunk['text']
+                        elif isinstance(msg.content, str):
+                            full_response += msg.content
+                        
+                        # Update the UI with current content
+                        if full_response:
+                            message_placeholder.markdown(full_response + "▌")
                 
-                if msg.content:
-                    # Handle case where content is a list of chunks
-                    if isinstance(msg.content, list):
-                        for chunk in msg.content:
-                            if isinstance(chunk, dict) and chunk.get('type') == 'text':
-                                full_response += chunk['text']
-                                message_placeholder.markdown(full_response + "▌")
-                    # Handle string content
-                    elif isinstance(msg.content, str):
-                        full_response += msg.content
-                        message_placeholder.markdown(full_response + "▌")
-            
-            # Final update without the cursor
-            message_placeholder.markdown(full_response)
-            
-            # Add assistant response to chat history
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-            
-            # CRITICAL: Update the session state with the complete state from LangGraph
-            if updated_state:
-                # Replace the entire input state with the latest from LangGraph
-                st.session_state.input_state = updated_state
-                # Also update the all_files_opened list for sidebar display
-                st.session_state.all_files_opened = updated_state.get("all_files_opened", [])
-            else:
-                logger.warning("No updated state received from LangGraph!")
-
+                # # Final update without cursor
+                # message_placeholder.markdown(full_response)
+                
+                # Force a rerun to update the conversation display
+                # This will read the latest state from the checkpoint
+                st.rerun()
+                
+            except Exception as e:
+                logger.error(f"Error during streaming: {e}")
+                message_placeholder.markdown(f"⚠️ Error: {str(e)}")
+                st.rerun()
         
         # Run the async function
         loop = asyncio.new_event_loop()

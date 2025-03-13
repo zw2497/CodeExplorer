@@ -207,7 +207,7 @@ if user_input := st.chat_input("Ask about the codebase..."):
                         # For tool messages, show they're being processed
                         display_msg = convert_message_for_display(msg)
                         if full_response:
-                            full_response += "\n\n" + f"Using tool: {display_msg['preview']}..."
+                            full_response += "\n\n \n\n" + f"Using tool: {display_msg['preview']}..."
                             message_placeholder.markdown(full_response + "▌")
                     # Process regular message content
                     elif hasattr(msg, 'content'):

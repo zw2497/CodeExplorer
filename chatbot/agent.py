@@ -44,17 +44,15 @@ class CodeExplorerChatbot:
                 return {**state, "command": "generate_kb"}
         return {**state, "command": None}
 
-    def _route_after_preprocessing(self, state: ChatState):
-        command = state.get("command")
-        if command == "generate_kb":
-            return "start_kb_exploration"
-        if state.get("generating_kb", False) and state.get("kb_exploration_rounds", 0) >= 4:
-            return "generate_kb"
-        return "agent"
-
     async def _agent_node(self, state: ChatState, config) -> ChatState:
         last_message = state["messages"][-1]
+        generating_kb = state.get("generating_kb", False)
+
         response = await self.llm_with_tools.ainvoke(state["messages"], config)
+
+        if not response.tool_calls and generating_kb:
+            {"messages": [response, HumanMessage(content="Continue to explore")]}
+
         if isinstance(last_message, ToolMessage) and hasattr(last_message, 'metadata') and last_message.metadata["tool_name"] == "open_files":
             last_message.content = last_message.content[:300] + "..."
             self.app.update_state({"configurable": {"thread_id": "1"}}, {"messages": last_message})
@@ -102,13 +100,13 @@ class CodeExplorerChatbot:
 
     def _start_kb_exploration_node(self, state: ChatState) -> ChatState:
         kb_instruction = """
-        Perform 3 rounds of exploration to build a comprehensive understanding of the codebase through iterative file analysis, summarization, and strategic file selection.
+        Explore the tools to build a comprehensive understanding of the codebase through iterative file analysis, summarization, and strategic file selection.
 
         In each round:
-        1. Request to open up to 5 files with clear reasoning
+        1. Request to open up to 5 files each time 
         2. Receive file contents (simulated through tools)
-        3. Generate a structured summary of key learnings and findings for file contents. Ensure the summary is detailed enough because the raw file content will be removed later.
-        4. Propose next files to explore based on new findings
+        3. Generate a structured key learnings and findings for opended files including Key classes, functions and their responsibilities. Ensure it is detailed enough because the raw file content will be removed later. 
+        4. Propose next files to explore based on new findings and use tools to open it.
         """
         return {
             "messages": [HumanMessage(content=kb_instruction)],
@@ -118,11 +116,8 @@ class CodeExplorerChatbot:
         }
 
     async def _generate_knowledge_base_node(self, state: ChatState, config) -> ChatState:
-        files_opened = state.get("all_files_opened", [])
-        unique_files = list(set(files_opened))
-        kb_prompt = f"""
-        Based on your exploration of {len(unique_files)} files across 5 rounds,
-        generate a comprehensive knowledge base document that explains:
+        kb_prompt = HumanMessage(content=f"""
+        Based on your exploration, generate a comprehensive knowledge base document that explains:
         
         1. Overall architecture and component relationships
         2. Key classes, functions and their responsibilities
@@ -131,26 +126,42 @@ class CodeExplorerChatbot:
         5. Design patterns and implementation details
         
         Structure your response as a well-organized technical document with clear sections.
-        """
-        kb_response = await self.llm.ainvoke(
-            [HumanMessage(content="You are a code documentation expert."),
-             HumanMessage(content=kb_prompt)],
+        No tools to use at this time.
+        """)
+        
+        kb_response = await self.llm_with_tools.ainvoke(
+            state["messages"] + [kb_prompt],
             config
         )
         return {
-            "messages": [AIMessage(content="✅ Knowledge base generated successfully after 15 rounds of exploration!")],
+            "messages": [kb_prompt, kb_response],
             "knowledge_base": kb_response.content,
             "generating_kb": False,
             "command": None
         }
-
+    def _route_after_preprocessing(self, state: ChatState):
+        command = state.get("command")
+        if command == "generate_kb":
+            return "start_kb_exploration"
+        return "agent"
+    
     def _route_tools_node(self, state: ChatState):
+        generating_kb = state.get("generating_kb", False)
+
         if not state["messages"]:
             return END
         last_message = state["messages"][-1]
         if hasattr(last_message, "tool_calls") and last_message.tool_calls:
             return "tools"
+
+        if generating_kb:
+            return "agent"
         return END
+    
+    def _route_after_tools(self, state: ChatState):
+        if state.get("generating_kb", False) and state.get("kb_exploration_rounds", 0) > 2:
+            return "generate_kb"
+        return 'agent'
     
     def _initialize_workflow(self):
         workflow = StateGraph(ChatState)
@@ -171,8 +182,7 @@ class CodeExplorerChatbot:
             self._route_after_preprocessing,
             {
                 "agent": "agent",
-                "start_kb_exploration": "start_kb_exploration",
-                "generate_kb": "generate_kb"
+                "start_kb_exploration": "start_kb_exploration"
             }
         )
         
@@ -187,8 +197,11 @@ class CodeExplorerChatbot:
         )
         
         # Standard edges
-        workflow.add_edge("tools", "agent")
+        workflow.add_conditional_edges("tools", self._route_after_tools, {
+            "agent": "agent",
+            "generate_kb": "generate_kb"
+        })
         workflow.add_edge("start_kb_exploration", "agent")
-        workflow.add_edge("generate_kb", "agent")
+        workflow.add_edge("generate_kb", END)
         
         self.app = workflow.compile(checkpointer=self.checkpointer)

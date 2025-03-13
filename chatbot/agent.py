@@ -45,17 +45,34 @@ class CodeExplorerChatbot:
             all_files_opened = []
             
             for tool_call in last_message.tool_calls:
-                if tool_call["name"] == "open_files":
+                tool_name = tool_call["name"]
+                tool_id = tool_call["id"]
+                
+                # Create a more structured response for better UI display
+                if tool_name == "open_files":
                     file_paths = tool_call["args"].get("file_paths", [])
                     result = self.tools[1].func(file_paths)
                     all_files_opened.extend(file_paths)
-                elif tool_call["name"] == "get_file_structure":
+                    # Add metadata for better UI rendering
+                    tool_metadata = {
+                        "tool_name": tool_name,
+                        "files_count": len(file_paths),
+                        "files": file_paths
+                    }
+                elif tool_name == "get_file_structure":
                     result = self.tools[0].func()
+                    tool_metadata = {
+                        "tool_name": tool_name,
+                        "structure_size": len(result.split('\n'))
+                    }
                 else:
-                    result = f"Unknown tool: {tool_call['name']}"
+                    result = f"Unknown tool: {tool_name}"
+                    tool_metadata = {"tool_name": tool_name}
+                
                 messages.append(ToolMessage(
                     content=result, 
-                    tool_call_id=tool_call["id"]
+                    tool_call_id=tool_id,
+                    additional_kwargs={"metadata": tool_metadata}
                 ))
             
             return {

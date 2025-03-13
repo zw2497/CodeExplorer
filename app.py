@@ -1,24 +1,23 @@
 import streamlit as st
 import asyncio
 from streamlit.runtime.scriptrunner import add_script_run_ctx
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
 from chatbot import CodeExplorerChatbot
 from config import CODEBASE_PATH, BATCH_SIZE, logger
 
 # Define initial prompt with file structure and instructions
 initial_prompt = (
-    "You're a helpful AI chatbot to help user exploring a new codebase.\n"
-    "You should be able to anwser general conversation. If necessary, you can use following tools."
-    "After each tool use, reflect what to explore next to anwser user's query. if you think it's confident to answer, give final result without tool use."
-    "Tool available:\n"
-    "1. Use 'get_file_structure' to understand the codebase file structure.\n"
-    "2. Use 'open_files' to inspect up to {batch_size} files each time from the file structure.\n"
-    "**Important formatting instructions:**\n"
-    "- Format your responses using Markdown syntax\n"
-    "- Use code blocks with language specification for code: ```python\n"
-    "- Use bold for important concepts: **important**\n"
-    "- Use headers for sections: ## Section Title\n"
-    "- Use lists and tables when appropriate\n"
+    "You are an AI assistant specialized in exploring and explaining codebases.\n\n"
+    
+    "## TOOLS\n"
+    "- `get_file_structure`: Use this FIRST to understand the codebase organization\n"
+    "- `open_files`: Open up to {batch_size} files to explore at once. You should not make assumptions about the presence of specific files. Only exploring files that are explicitly present in the provided file structure returned from get_file_structure.\n\n"
+    
+    "## EXPLORATION STRATEGY\n"
+    "- After each tool use, explicitly state three things:"
+    " 1. what you've learned\n"
+    " 2. what information you still need\n"
+    " 3. what files to open next for exploration\n"
 ).format(batch_size=BATCH_SIZE)
 
 # Initialize Streamlit app
@@ -37,10 +36,45 @@ def get_current_state():
         return snapshot.values
     return {"messages": [], "all_files_opened": []}
 
+# Generate a preview of tool message content
+def generate_tool_preview(msg):
+    if not isinstance(msg, ToolMessage):
+        return None
+    
+    content = str(msg.content)
+    metadata = msg.additional_kwargs.get("metadata", {})
+    tool_name = metadata.get("tool_name", "tool")
+    
+    if tool_name == "get_file_structure":
+        structure_size = metadata.get("structure_size", 0)
+        lines = content.split('\n')
+        preview = '\n'.join(lines[:5]) + (f"\n... ({structure_size-5} more lines)" if structure_size > 5 else "")
+        return f"📁 **File Structure** (showing {min(5, structure_size)} of {structure_size} lines)"
+    
+    elif tool_name == "open_files":
+        files = metadata.get("files", [])
+        files_count = len(files)
+        file_list = '\n'.join([f"- {f}" for f in files[:3]])
+        if files_count > 3:
+            file_list += f"\n- ... {files_count-3} more files"
+        return f"📄 **Files Opened** ({files_count} files)"
+    
+    # Default preview for other tools
+    if len(content) > 100:
+        return f"🔧 **Tool Response** ({len(content)} characters)"
+    return f"🔧 **Tool Response**: {content[:100]}"
+
 # Convert LangChain message to format suitable for UI display
 def convert_message_for_display(msg):
     if isinstance(msg, SystemMessage):
         return None  # Skip system messages
+    
+    if isinstance(msg, ToolMessage):
+        return {
+            "role": "tool",
+            "content": str(msg.content),
+            "preview": generate_tool_preview(msg)
+        }
     
     role = "assistant" if isinstance(msg, AIMessage) else "user"
     
@@ -59,9 +93,16 @@ def convert_message_for_display(msg):
 current_state = get_current_state()
 for msg in current_state.get("messages", []):
     display_msg = convert_message_for_display(msg)
-    print(display_msg)
-    if display_msg:  # Skip system messages
-        with st.chat_message(display_msg["role"]):
+    if not display_msg:  # Skip system messages
+        continue
+        
+    with st.chat_message(display_msg["role"] if display_msg["role"] != "tool" else "assistant"):
+        if display_msg["role"] == "tool":
+            # Display collapsible tool message
+            with st.expander(display_msg["preview"]):
+                st.code(display_msg["content"])
+        else:
+            # Regular message display
             st.markdown(display_msg["content"])
 
 # Add sidebar with information and files explored
@@ -122,15 +163,6 @@ with st.sidebar:
     - Ask specific questions about functionality
     - Inquire about specific files or components
     """)
-    
-    # # Add option to reset conversation
-    # if st.button("Reset Conversation"):
-    #     initial_state = {
-    #         "messages": [SystemMessage(content=initial_prompt)],
-    #         "all_files_opened": []
-    #     }
-    #     st.session_state.chatbot.app.update_state(initial_state, st.session_state.config)
-    #     st.rerun()
 
 # Get user input
 if user_input := st.chat_input("Ask about the codebase..."):
@@ -162,7 +194,6 @@ if user_input := st.chat_input("Ask about the codebase..."):
         
         async def stream_response():
             full_response = ""
-            # Prepare input for the chatbot
             
             try:
                 # Stream the response
@@ -171,8 +202,14 @@ if user_input := st.chat_input("Ask about the codebase..."):
                     st.session_state.config,
                     stream_mode="messages",
                 ):
-                    # Process message content based on its type
-                    if hasattr(msg, 'content'):
+                    # Handle tool messages differently
+                    if isinstance(msg, ToolMessage):
+                        # For tool messages, show they're being processed
+                        display_msg = convert_message_for_display(msg)
+                        if full_response:
+                            message_placeholder.markdown(full_response + "\n" + f"Using tool: {display_msg['preview']}...")
+                    # Process regular message content
+                    elif hasattr(msg, 'content'):
                         # Handle content that might be a list of chunks or a string
                         if isinstance(msg.content, list):
                             for chunk in msg.content:
@@ -184,9 +221,6 @@ if user_input := st.chat_input("Ask about the codebase..."):
                         # Update the UI with current content
                         if full_response:
                             message_placeholder.markdown(full_response + "▌")
-                
-                # # Final update without cursor
-                # message_placeholder.markdown(full_response)
                 
                 # Force a rerun to update the conversation display
                 # This will read the latest state from the checkpoint

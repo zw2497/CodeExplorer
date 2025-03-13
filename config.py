@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 AWS_REGION = "us-east-1"
-BEDROCK_MODEL = "anthropic.claude-3-sonnet-20240229-v1:0"
-BEDROCK_MODEL = "anthropic.claude-3-5-haiku-20241022-v1:0"
+BEDROCK_MODEL = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+# BEDROCK_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 CODEBASE_PATH = "/Users/wuzhiche/Workspace/ATE"  # Default path
 BATCH_SIZE = 8
 

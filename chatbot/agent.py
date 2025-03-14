@@ -133,9 +133,19 @@ class CodeExplorerChatbot:
             state["messages"] + [kb_prompt],
             config
         )
+
+        # Process content to ensure it's always a string
+        if isinstance(kb_response.content, list):
+            kb_content = "".join(
+                chunk["text"] for chunk in kb_response.content 
+                if isinstance(chunk, dict) and chunk.get("type") == "text"
+            )
+        else:
+            kb_content = str(kb_response.content)
+
         return {
             "messages": [kb_prompt, kb_response],
-            "knowledge_base": kb_response.content,
+            "knowledge_base": kb_content,
             "generating_kb": False,
             "command": None
         }

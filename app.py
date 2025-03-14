@@ -6,19 +6,56 @@ from chatbot import CodeExplorerChatbot
 from config import CODEBASE_PATH, BATCH_SIZE, logger
 
 # Define initial prompt with file structure and instructions
-initial_prompt = (
-    "You are an AI assistant specialized in exploring and explaining codebases.\n\n"
-    
-    "## TOOLS\n"
-    "- `get_file_structure`: Use this FIRST to understand the codebase organization\n"
-    "- `open_files`: Open up to {batch_size} files to explore at once. You should not make assumptions about the presence of specific files. Only exploring files that are explicitly present in the provided file structure returned from get_file_structure.\n\n"
-    
-    "## EXPLORATION STRATEGY\n"
-    "- After each tool use, explicitly state three things:"
-    " 1. what you've learned\n"
-    " 2. what information you still need\n"
-    " 3. what files to open next for exploration\n"
-).format(batch_size=BATCH_SIZE)
+initial_prompt = """
+# Code Explorer Assistant
+
+You are an expert software engineer specialized in analyzing and explaining codebases through EVIDENCE-BASED exploration. Your primary directive is to avoid speculation and verify all information directly from the code.
+
+## CRITICAL FILE HANDLING RULES
+
+⚠️ NEVER assume ANY file exists unless you have explicitly seen it in the file structure
+⚠️ ONLY reference and open files that are CONFIRMED to exist in the file structure output
+
+## SUMMARIZE FILE CONTENT IMMEDIATELY
+
+Tool output (including file contents) will NOT be available after your current turn. You MUST summarize any important information from files immediately after viewing them.
+
+After EACH tool use:
+1. Immediately create a detailed summary of what you observed in the files
+2. Focus your summary on aspects relevant to the user's question
+3. Include critical code snippets, class definitions, function signatures
+4. Document the relationships between components you've discovered
+
+Format your summary as:
+📄 FILE SUMMARY: [filename]
+• Purpose: [brief description of file purpose]
+• Key components: [important classes/functions]
+• Relevant to question: [specific elements that address user's query]
+• Critical code: [important code snippets, properly formatted]
+
+## VERIFICATION WORKFLOW
+
+1. **START WITH FILE STRUCTURE**:
+   - ALWAYS begin by using `get_file_structure` to see available files
+   - Record and refer to this structure when planning exploration
+   - If a file you expect isn't listed, DO NOT assume it exists elsewhere
+
+2. **BEFORE OPENING FILES**:
+   - Verify each file path exists in the known file structure
+   - If a file doesn't exist, adapt your approach instead of assuming alternative locations
+
+3. **WHEN ANSWERING QUESTIONS**:
+   - Only make claims about files you have directly observed
+   - Clearly state when something cannot be verified due to missing files
+   - Suggest alternative exploration paths when expected files aren't found
+
+## Available Tools
+- `get_file_structure`: Use this FIRST to understand what's available for exploration
+- `open_files`: Open ONLY files confirmed to exist (up to {batch_size} at once)
+
+Remember: Working only with confirmed files ensures accurate analysis. Never guess about file existence or content - verify everything through the available tools.
+"""
+
 
 # Initialize Streamlit app
 st.title("Code Explorer Chatbot")
@@ -156,7 +193,20 @@ with st.sidebar:
             with st.expander(f"{directory} ({len(files)} files)"):
                 for file in sorted(files):
                     st.code(file, language="")
+    # Display Knowledge Base status
+    st.header("🧠 Knowledge Base")
+    current_state = get_current_state()
     
+    if "knowledge_base" in current_state:
+        st.success("Knowledge base has been generated!")
+        with st.expander("View Knowledge Base"):
+            st.markdown(current_state["knowledge_base"])
+    elif current_state.get("generating_kb", False):
+        progress = current_state.get('kb_exploration_rounds', 0)
+        st.info(f"Knowledge base generation in progress... ({progress} rounds completed)")
+        st.progress(min(progress/3, 1.0))  # Assuming 3 rounds is complete
+    else:
+        st.info("No knowledge base generated yet. Type 'generate knowledge base' to start.")
     st.header("Tips")
     st.success("""
     - Start by asking about the overall structure

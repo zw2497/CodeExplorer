@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import asyncio
 from streamlit.runtime.scriptrunner import add_script_run_ctx
@@ -5,11 +6,27 @@ from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, Tool
 from chatbot import CodeExplorerChatbot
 from config import CODEBASE_PATH, BATCH_SIZE, logger
 
+# New method: Load existing knowledge base
+def load_knowledge_base() -> str:
+    kb_path = os.path.join(CODEBASE_PATH, 'knowledge_base.md')
+    try:
+        if os.path.exists(kb_path):
+            with open(kb_path, 'r', encoding='utf-8') as f:
+                return f.read()
+    except Exception as e:
+        logger.error(f"Error loading knowledge base: {e}")
+    return "None"
+
 # Define initial prompt with file structure and instructions
-initial_prompt = """
+initial_prompt = f"""
 # Code Explorer Assistant
 
-You are an expert software engineer specialized in analyzing and explaining codebases through EVIDENCE-BASED exploration. Your primary directive is to avoid speculation and verify all information directly from the code.
+You are an expert software engineer chatbot specialized in analyzing and explaining codebases through EVIDENCE-BASED exploration. 
+Your primary directive is to avoid speculation and verify all information directly from the code.
+
+[Current Knowledge Base about the codebase]
+{load_knowledge_base()}
+
 
 ## CRITICAL FILE HANDLING RULES
 
@@ -51,10 +68,13 @@ Format your summary as:
 
 ## Available Tools
 - `get_file_structure`: Use this FIRST to understand what's available for exploration
-- `open_files`: Open ONLY files confirmed to exist (up to {batch_size} at once)
-
+- `open_files`: Open ONLY files confirmed to exist (up to 5 at once)
 Remember: Working only with confirmed files ensures accurate analysis. Never guess about file existence or content - verify everything through the available tools.
+
+Now connect you with user, be conversational.
 """
+
+
 
 
 # Initialize Streamlit app
@@ -65,6 +85,8 @@ st.write("Explore your codebase with AI assistance")
 if "config" not in st.session_state:
     st.session_state.config = {"configurable": {"thread_id": "1"}}
     st.session_state.chatbot = CodeExplorerChatbot(CODEBASE_PATH)
+    if load_knowledge_base():
+        st.session_state.chatbot.app.update_state(st.session_state.config, {"knowledge_base": load_knowledge_base()})
 
 # Function to get current state from checkpoint
 def get_current_state():
@@ -163,9 +185,8 @@ with st.sidebar:
         
         # Show last message content
         if current_state.get("messages"):
-            st.text("Last message in state:")
-            last_msg = current_state["messages"][-1]
-            st.code(str(last_msg)[:200] + "...")
+            with st.expander("View messages"):
+                st.markdown(current_state["messages"])
     
     # Display files explored in the sidebar
     files_opened = get_current_state().get("all_files_opened", [])

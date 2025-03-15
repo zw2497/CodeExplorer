@@ -15,3 +15,4 @@ class ChatState(TypedDict):
     generating_kb: bool = False     # Flag for KB generation mode
     knowledge_base: Optional[str] = None  # Store generated KB
     command: str
+    summary: str = ""  # Add summary field

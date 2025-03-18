@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 AWS_REGION = "us-east-1"
 # BEDROCK_MODEL = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 BEDROCK_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
-CODEBASE_PATH = "/Users/wuzhiche/Workspace/ATE"  # Default path
+# CODEBASE_PATH = "/Users/wuzhiche/Workspace/ATE"  # Default path
+CODEBASE_PATH = "/Users/wuzhiche/Workspace/BTS"
 BATCH_SIZE = 8
 
 # Use boto3 to load credentials from ~/.aws/credentials default profile

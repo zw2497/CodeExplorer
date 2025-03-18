@@ -2,7 +2,7 @@ import os
 from typing import Dict, Any
 import logging
 from langchain_aws import ChatBedrock
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from .models import ChatState
@@ -59,14 +59,16 @@ class CodeExplorerChatbot:
     async def _agent_node(self, state: ChatState, config) -> ChatState:
         last_message = state["messages"][-1]
         generating_kb = state.get("generating_kb", False)
+        if isinstance(last_message, ToolMessage) and hasattr(last_message, 'metadata') and last_message.metadata["tool_name"] == "open_files":
+            response = await self.llm_with_tools.ainvoke(state["messages"] + [HumanMessage(content="\n\n Remind: [Create an immediate comprehensive summary for these files first, then continue the exploration or anwser directly if you are confident.]")], config)
 
         response = await self.llm_with_tools.ainvoke(state["messages"], config)
 
         if not response.tool_calls and generating_kb:
-            return {"messages": [response, HumanMessage(content="Continue to self explore in order to generate the comprehensive knowledge base.")]}
+            return {"messages": [response, HumanMessage(content="\n\n Continue to self explore in order to generate the comprehensive knowledge base.")]}
 
         if isinstance(last_message, ToolMessage) and hasattr(last_message, 'metadata') and last_message.metadata["tool_name"] == "open_files":
-            last_message.content = last_message.content[:300] + "..."
+            last_message.content = "..."
             self.app.update_state({"configurable": {"thread_id": "1"}}, {"messages": last_message})
         return {"messages": [response]}
 
@@ -133,21 +135,61 @@ class CodeExplorerChatbot:
     async def _generate_knowledge_base_node(self, state: ChatState, config) -> ChatState:
         existing_kb = state.get("knowledge_base", "")
         kb_prompt = HumanMessage(content=f"""
-        Based on your exploration and the existing knowledge base below, generate an updated full knowledge document back:
-        
-        [Current Knowledge Base]
-        {existing_kb}
-        
-        Focus on:
-        1. what are the files examined to generate below content.(just file name without path)
-        1. Architecture and component relationships
-        2. Key classes/functions with responsibilities
-        3. Workflows and control flows
-        4. APIs and integration points
-        5. Design patterns and implementation
-        
-        Structure as a technical document.
-        Remeber to generated full document back instead of updated session.
+# Knowledge Base Update Protocol
+
+## OBJECTIVE
+Generate a comprehensive, structured technical document that captures the complete understanding of the codebase based on all explorations so far.
+
+## INPUT SOURCES
+- Previously established knowledge: {existing_kb}
+- New insights from your recent file explorations
+
+## DOCUMENT STRUCTURE
+Create a complete technical document with the following sections:
+
+### 1. Code Exploration Summary
+- **Files Examined**: List all files you've analyzed (filenames without full paths)
+- **Coverage Assessment**: Brief evaluation of what percentage of the codebase has been explored
+
+### 2. System Architecture
+- **Component Overview**: Major components and their relationships
+- **Dependency Graph**: Key dependencies between components
+- **Data Flow**: How information moves through the system
+
+### 3. Key Components Reference
+For each significant component:
+- **Purpose**: Primary responsibility
+- **API Surface**: Public methods/interfaces
+- **Dependencies**: What it relies on
+- **Usage Context**: Where and how it's used
+
+### 4. Workflows and Processes
+- **Main Execution Flows**: Step-by-step description of key processes
+- **Control Flow Patterns**: How program execution is directed
+- **Edge Cases**: Notable exception handling or special conditions
+
+### 5. Technical Patterns and Implementation Details
+- **Design Patterns**: Identified software patterns and their implementation
+- **Architecture Decisions**: Notable architectural choices and their implications
+- **Performance Considerations**: Any observed optimization strategies
+
+### 6. Integration Points
+- **External APIs**: Interfaces to external systems
+- **Extension Points**: How the system can be extended
+- **Configuration Options**: How the system can be configured
+
+### 7. Knowledge Gaps
+- **Unexplored Areas**: Components or aspects not yet fully understood
+- **Open Questions**: Uncertainties that remain after exploration
+
+## INTEGRATION GUIDELINES
+1. **Reconcile Information**: When new findings contradict existing knowledge, evaluate which is more accurate based on direct code evidence
+2. **Preserve Valid Insights**: Retain all accurate information from the existing knowledge base
+3. **Expand, Don't Replace**: Add detail to existing sections rather than overwriting them when possible
+4. **Evidence-Based Updates**: Only include information directly observed in the code
+
+## OUTPUT FORMAT
+Generate the COMPLETE knowledge base document incorporating both existing and new knowledge. Do not merely describe changes or additions - provide the entire updated knowledge base as a cohesive markdown document.
         """)
         
         kb_response = await self.llm_with_tools.ainvoke(
@@ -183,9 +225,10 @@ class CodeExplorerChatbot:
 
     async def _summarize_conversation(self, state: ChatState, config) -> ChatState:
         # Keep last 4 messages (adjust number as needed)
-        keep_messages = 4
+        keep_messages = 1
         messages_to_remove = state["messages"][:-keep_messages]
-        if isinstance(messages_to_remove[0], ToolMessage):
+
+        if isinstance(messages_to_remove[0], SystemMessage):
             messages_to_remove.pop(0)
         
         # Generate summary including existing summary
@@ -206,7 +249,7 @@ class CodeExplorerChatbot:
         
         return {
             "summary": response.content,
-            "messages": delete_messages + [HumanMessage(content="Current knowledge base: " + state["knowledge_base"])]  # This will remove old messages from state
+            "messages": delete_messages  # This will remove old messages from state
         }
 
     def _route_after_preprocessing(self, state: ChatState):
@@ -228,13 +271,13 @@ class CodeExplorerChatbot:
         if generating_kb:
             return "agent"
         
-        if len(state["messages"]) > 8:
+        if len(state["messages"]) > 15:
             return "summarizer"
         
         return END
     
     def _route_after_tools(self, state: ChatState):
-        if state.get("generating_kb", False) and state.get("kb_exploration_rounds", 0) > 2:
+        if state.get("generating_kb", False) and state.get("kb_exploration_rounds", 0) > 8:
             return "generate_kb"
         return 'agent'
     

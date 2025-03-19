@@ -17,22 +17,30 @@ class FileSystem:
                 if f.is_file() and f.suffix.lower() in text_extensions]
 
     def get_file_structure(self) -> str:
-        """Generate a nested file structure with total size."""
-        total_size = sum(f.stat().st_size for f in self.path.rglob("*") if f.is_file()) / 1024
-        structure = f"{self.path.name} ({total_size:.1f}KB, {len(self.files)} files)\n"
+        """Generate a nested file structure with total size, ignoring test files."""
+        # Filter out test files (case insensitive)
+        non_test_files = [file for file in self.files if not Path(file).stem.lower().endswith('test')]
+        
+        # Calculate total size of non-test files
+        total_size = sum((self.path / file).stat().st_size for file in non_test_files) / 1024
+        structure = f"{self.path.name} ({total_size:.1f}KB, {len(non_test_files)} files)\n"
+        
         packages = {}
-        for file in self.files:
+        for file in non_test_files:
             parts = file.split(os.sep)
             pkg = "/".join(parts[:-1]) if len(parts) > 1 else ""
             if pkg not in packages:
                 packages[pkg] = []
             packages[pkg].append(parts[-1])
+        
         for pkg, files in sorted(packages.items()):
             if pkg:
                 structure += f"├── {pkg} ({len(files)} files)\n"
             for file in sorted(files):
                 structure += f"│   ├── {file}\n" if pkg else f"├── {file}\n"
+        
         return structure.strip()
+
 
     def read_files(self, file_paths: List[str], max_chars: int = 30000) -> str:
         """Read content of selected files, trimmed to max_chars, with path cleaning."""

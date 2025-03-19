@@ -59,13 +59,13 @@ class CodeExplorerChatbot:
     async def _agent_node(self, state: ChatState, config) -> ChatState:
         last_message = state["messages"][-1]
         generating_kb = state.get("generating_kb", False)
-        if isinstance(last_message, ToolMessage) and hasattr(last_message, 'metadata') and last_message.metadata["tool_name"] == "open_files":
-            response = await self.llm_with_tools.ainvoke(state["messages"] + [HumanMessage(content="\n\n Remind: [Create an immediate comprehensive summary for these files first, then continue the exploration or anwser directly if you are confident.]")], config)
+        # if isinstance(last_message, ToolMessage) and hasattr(last_message, 'metadata') and last_message.metadata["tool_name"] == "open_files":
+        #     response = await self.llm_with_tools.ainvoke(state["messages"] + [HumanMessage(content="\n\n [Remind: Create summaries for opening files, if you have created summary above, ignore this reminder]")], config)
 
         response = await self.llm_with_tools.ainvoke(state["messages"], config)
 
         if not response.tool_calls and generating_kb:
-            return {"messages": [response, HumanMessage(content="\n\n Continue to self explore in order to generate the comprehensive knowledge base.")]}
+            return {"messages": [response, HumanMessage(content="\n\n Continue")]}
 
         if isinstance(last_message, ToolMessage) and hasattr(last_message, 'metadata') and last_message.metadata["tool_name"] == "open_files":
             last_message.content = "..."
@@ -114,16 +114,17 @@ class CodeExplorerChatbot:
 
     def _start_kb_exploration_node(self, state: ChatState) -> ChatState:
         kb_instruction = """
-
-        Let's start build a comprehensive understanding of the codebase through iterative file analysis, summarization, and strategic file selection.
-        if there is current knowledge base. You goal is to dive more deep to enhance and keep improving the knowledge base to gain more understanding of the code base.
-        THe current knowledge base has provided examined file. You should prioritize file not examined before for new information.
+        Let's start build a high-level understanding of the codebase through iterative file analysis, summarization, and strategic file selection.
+        The goal is to capture the critical code path, key business logic / workflow, integration point(APIs, external dependencies). Don't care too much about code details. 
+        if there is current knowledge base, review it first, then explore to enhance the knowledge base.
+        If Files Examined provided, you should prioritize files not examined before for new information.
 
         In each round:
         1. Request to open up to 5 files each time, ONLY open files that are exist in the file structure output
-        2. Generate a structured key learnings and findings for opended files including Key classes, functions, relations with known knowledge and their responsibilities.
+        2. Create a summary for these opening files, explain it in simple words or code. Note down key findings, methods, classes.
         3. Propose next files to explore based on new findings and use tools to open it.
 
+        Just keep exploring until I told you to generate the final response.
         """
         return {
             "messages": [HumanMessage(content=kb_instruction)],
@@ -138,56 +139,30 @@ class CodeExplorerChatbot:
 # Knowledge Base Update Protocol
 
 ## OBJECTIVE
-Generate a comprehensive, structured technical document that captures the complete understanding of the codebase based on all explorations so far.
-
+Generate a comprehensive, structured technical document in Markdown that captures the complete understanding of the codebase based on all explorations so far.
+Use mermaid if you want to generate graph.
+                                 
 ## INPUT SOURCES
 - Previously established knowledge: {existing_kb}
 - New insights from your recent file explorations
-
 ## DOCUMENT STRUCTURE
-Create a complete technical document with the following sections:
-
+Use following sections as reference also output any other information you think is beneficial to build a comprehensive knowlege base:
 ### 1. Code Exploration Summary
 - **Files Examined**: List all files you've analyzed (filenames without full paths)
 - **Coverage Assessment**: Brief evaluation of what percentage of the codebase has been explored
-
 ### 2. System Architecture
 - **Component Overview**: Major components and their relationships
 - **Dependency Graph**: Key dependencies between components
 - **Data Flow**: How information moves through the system
-
 ### 3. Key Components Reference
-For each significant component:
-- **Purpose**: Primary responsibility
-- **API Surface**: Public methods/interfaces
-- **Dependencies**: What it relies on
-- **Usage Context**: Where and how it's used
-
 ### 4. Workflows and Processes
-- **Main Execution Flows**: Step-by-step description of key processes
-- **Control Flow Patterns**: How program execution is directed
-- **Edge Cases**: Notable exception handling or special conditions
-
 ### 5. Technical Patterns and Implementation Details
 - **Design Patterns**: Identified software patterns and their implementation
 - **Architecture Decisions**: Notable architectural choices and their implications
-- **Performance Considerations**: Any observed optimization strategies
-
 ### 6. Integration Points
-- **External APIs**: Interfaces to external systems
-- **Extension Points**: How the system can be extended
-- **Configuration Options**: How the system can be configured
-
+APIs and external dependency this service used.
 ### 7. Knowledge Gaps
-- **Unexplored Areas**: Components or aspects not yet fully understood
-- **Open Questions**: Uncertainties that remain after exploration
-
-## INTEGRATION GUIDELINES
-1. **Reconcile Information**: When new findings contradict existing knowledge, evaluate which is more accurate based on direct code evidence
-2. **Preserve Valid Insights**: Retain all accurate information from the existing knowledge base
-3. **Expand, Don't Replace**: Add detail to existing sections rather than overwriting them when possible
-4. **Evidence-Based Updates**: Only include information directly observed in the code
-
+- **Unexplored Areas**: Components or aspects not yet fully understood, uncertainties that remain after exploration
 ## OUTPUT FORMAT
 Generate the COMPLETE knowledge base document incorporating both existing and new knowledge. Do not merely describe changes or additions - provide the entire updated knowledge base as a cohesive markdown document.
         """)
@@ -277,7 +252,7 @@ Generate the COMPLETE knowledge base document incorporating both existing and ne
         return END
     
     def _route_after_tools(self, state: ChatState):
-        if state.get("generating_kb", False) and state.get("kb_exploration_rounds", 0) > 8:
+        if state.get("generating_kb", False) and state.get("kb_exploration_rounds", 0) > 5:
             return "generate_kb"
         return 'agent'
     

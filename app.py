@@ -1,4 +1,5 @@
 import os
+import re
 import streamlit as st
 import asyncio
 from streamlit.runtime.scriptrunner import add_script_run_ctx
@@ -31,8 +32,6 @@ You are a technical assistant specialized in analyzing and explaining codebases 
 ### Primary Tools:
 - `get_file_structure([path])`: ALWAYS use this FIRST to map the available files.
 - `open_files([file_paths])`: Read file contents.
-   - Tool outputs containing code will be truncated in chat history soon. 
-   - To preserve critical information, AFTER EACH open_files usage, Create an immediate comprehensive summary for these files.
 
 ### Effective Tool Usage:
 1. Start EVERY exploration with `get_file_structure` to understand available files
@@ -46,25 +45,24 @@ You are a technical assistant specialized in analyzing and explaining codebases 
 - ONLY reference files confirmed to exist in the file structure output
 - When uncertain which files to examine, explain your thought process to the user
 
-## RESPONSE STRUCTURE
-
-When answering user queries:
-1. Begin with a direct, concise answer to their question when possible
-2. Explain your exploration process and what you discovered
-3. Include relevant code snippets with proper syntax highlighting
-4. Connect your findings to the bigger picture of how the codebase works
-5. If you need more information to fully answer, clearly explain what additional files you need to examine
-
-## KNOWLEDGE BASE INTEGRATION
-When analyzing code, incorporate relevant information from existing knowledge base about the codebase but always verify against the actual code you observe.
-
-Current Knowledge Base:
+## Current Knowledge Base:
+Here is the knowledge base generated last time.
 {load_knowledge_base()}
 
 Remember to be conversational while maintaining technical precision. Adapt your explanation depth to match the user's apparent technical expertise.
 """
 
+# ## RESPONSE STRUCTURE
 
+# When answering user queries:
+# 1. Begin with a direct, concise answer to their question when possible
+# 2. Explain your exploration process and what you discovered
+# 3. Include relevant code snippets with proper syntax highlighting
+# 4. Connect your findings to the bigger picture of how the codebase works
+# 5. If you need more information to fully answer, clearly explain what additional files you need to examine
+
+# ## KNOWLEDGE BASE INTEGRATION
+# When analyzing code, incorporate relevant information from existing knowledge base about the codebase but always verify against the actual code you observe.
 
 
 # Initialize Streamlit app
@@ -73,7 +71,7 @@ st.write("Explore your codebase with AI assistance")
 
 # Initialize session state for configuration
 if "config" not in st.session_state:
-    st.session_state.config = {"configurable": {"thread_id": "1"}}
+    st.session_state.config = {"configurable": {"thread_id": "1", "recursion_limit": 50}}
     st.session_state.chatbot = CodeExplorerChatbot(CODEBASE_PATH)
     if load_knowledge_base():
         st.session_state.chatbot.app.update_state(st.session_state.config, {"knowledge_base": load_knowledge_base()})
@@ -153,7 +151,29 @@ for msg in current_state.get("messages", []):
         else:
             # Regular message display
             st.markdown(display_msg["content"])
-
+def render_markdown_with_mermaid(markdown_text):
+    # Split the content by mermaid code blocks
+    parts = re.split(r'(```mermaid[\s\S]*?```)', markdown_text)
+    
+    for part in parts:
+        if part.startswith('```mermaid'):
+            # Extract mermaid content
+            mermaid_code = part.replace('```mermaid', '').replace('```', '').strip()
+            
+            # Create HTML with mermaid
+            mermaid_html = f"""
+            <div class="mermaid">
+            {mermaid_code}
+            </div>
+            <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+            <script>mermaid.initialize({{startOnLoad:true}});</script>
+            """
+            
+            # Render HTML
+            st.components.v1.html(mermaid_html, height=300)  # Adjust height as needed
+        elif part:
+            # Render regular markdown
+            st.markdown(part)
 # Add sidebar with information and files explored
 with st.sidebar:
     st.header("About")
@@ -208,10 +228,10 @@ with st.sidebar:
     st.header("🧠 Knowledge Base")
     current_state = get_current_state()
     
-    if "knowledge_base" in current_state:
+    if "knowledge_base" in current_state and current_state["knowledge_base"]:
         st.success("Knowledge base has been generated!")
         with st.expander("View Knowledge Base"):
-            st.markdown(current_state["knowledge_base"])
+            render_markdown_with_mermaid(current_state["knowledge_base"])
     elif current_state.get("generating_kb", False):
         progress = current_state.get('kb_exploration_rounds', 0)
         st.info(f"Knowledge base generation in progress... ({progress} rounds completed)")

@@ -12,7 +12,7 @@ class FileSystem:
 
     def _list_files(self) -> List[str]:
         """List all text files in the codebase."""
-        text_extensions = {'.java', '.py', '.txt', '.js', '.cpp', '.h', '.yml', '.yaml', '.properties'}
+        text_extensions = {'.java', '.py', '.js', '.cpp', '.h', '.yml', '.yaml', '.properties'}
         return [str(f.relative_to(self.path)) for f in self.path.rglob("*") 
                 if f.is_file() and f.suffix.lower() in text_extensions]
 

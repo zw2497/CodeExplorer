@@ -64,12 +64,13 @@ class CodeExplorerChatbot:
 
         response = await self.llm_with_tools.ainvoke(state["messages"], config)
 
-        if not response.tool_calls and generating_kb:
-            return {"messages": [response, HumanMessage(content="\n\n Continue")]}
-
+        # remove message content
         if isinstance(last_message, ToolMessage) and hasattr(last_message, 'metadata') and last_message.metadata["tool_name"] == "open_files":
             last_message.content = "..."
             self.app.update_state({"configurable": {"thread_id": "1"}}, {"messages": last_message})
+
+        if not response.tool_calls and generating_kb:
+            return {"messages": [response, HumanMessage(content="\n\n Continue")]}
         return {"messages": [response]}
 
     def _execute_tools_node(self, state: ChatState) -> ChatState:
@@ -114,17 +115,15 @@ class CodeExplorerChatbot:
 
     def _start_kb_exploration_node(self, state: ChatState) -> ChatState:
         kb_instruction = """
-        Let's start build a high-level understanding of the codebase through iterative file analysis, summarization, and strategic file selection.
-        The goal is to capture the critical code path, key business logic / workflow, integration point(APIs, external dependencies). Don't care too much about code details. 
-        if there is current knowledge base, review it first, then explore to enhance the knowledge base.
-        If Files Examined provided, you should prioritize files not examined before for new information.
+In order for you to quickly anwser my questions, you should start ramp up and build a high-level understanding knowledge base of the codebase through iterative file analysis, summarization, and strategic file selection.
+The goal is to capture the critical code path, core business logic and workflow. This knowledge base will be a key reference when anwsering my questions.
+if there is a existing knowledge base, review it first, then explore to enhance the knowledge base.
+If Files Examined provided in existing knowledge base, you should prioritize files not examined for new information and focus more on detailed business logic.
 
-        In each round:
-        1. Request to open up to 5 files each time, ONLY open files that are exist in the file structure output
-        2. Create a summary for these opening files, explain it in simple words or code. Note down key findings, methods, classes.
-        3. Propose next files to explore based on new findings and use tools to open it.
-
-        Just keep exploring until I told you to generate the final response.
+In each round:
+1. Request to open up to 5 files each time, ONLY open files that are exist in the file structure output
+2. For opened files, summarize what findings you find valuable for the high-level knowledge base, note down key findings, criticle methods, also main business logic[important].
+3. Propose next files to explore based on new findings, explain the reason and use tools to open it.\n\n
         """
         return {
             "messages": [HumanMessage(content=kb_instruction)],
@@ -139,32 +138,45 @@ class CodeExplorerChatbot:
 # Knowledge Base Update Protocol
 
 ## OBJECTIVE
-Generate a comprehensive, structured technical document in Markdown that captures the complete understanding of the codebase based on all explorations so far.
+Generate a structured technical document in Markdown that captures the complete understanding of the codebase based on all explorations so far.
 Use mermaid if you want to generate graph.
                                  
-## INPUT SOURCES
 - Previously established knowledge: {existing_kb}
-- New insights from your recent file explorations
+
 ## DOCUMENT STRUCTURE
-Use following sections as reference also output any other information you think is beneficial to build a comprehensive knowlege base:
+Use following sections as mental model reference.
+
 ### 1. Code Exploration Summary
 - **Files Examined**: List all files you've analyzed (filenames without full paths)
 - **Coverage Assessment**: Brief evaluation of what percentage of the codebase has been explored
 ### 2. System Architecture
-- **Component Overview**: Major components and their relationships
+Design Pattern: MVC/MVVM/Microservices/etc
+Component Map: Core modules and their relationships
+Layer Organization: Frontend/Backend/Data/etc
+Communication Flow: How information moves through system
 - **Dependency Graph**: Key dependencies between components
 - **Data Flow**: How information moves through the system
-### 3. Key Components Reference
-### 4. Workflows and Processes
-### 5. Technical Patterns and Implementation Details
-- **Design Patterns**: Identified software patterns and their implementation
-- **Architecture Decisions**: Notable architectural choices and their implications
-### 6. Integration Points
-APIs and external dependency this service used.
-### 7. Knowledge Gaps
+### 3. Control Flow Understanding
+Entry Points: Where execution begins
+Request Lifecycle: Request → processing → response path
+Event Handling: How system responds to triggers
+### 4: Core Business Logic
+This is important, can be more detailed
+### 4. Primary Data Model
+Core Entities: Primary data structures
+Relationships: How entities connect
+State Management: How application state changes
+Persistence Strategy: Database/file storage approach
+### 5. Technology Ecosystem
+Language(s) & Framework(s): Main technologies used
+Key Dependencies: Critical external libraries
+### 6. Knowledge Gaps
 - **Unexplored Areas**: Components or aspects not yet fully understood, uncertainties that remain after exploration
+
 ## OUTPUT FORMAT
-Generate the COMPLETE knowledge base document incorporating both existing and new knowledge. Do not merely describe changes or additions - provide the entire updated knowledge base as a cohesive markdown document.
+Generate the COMPLETE knowledge base document incorporating both existing and new knowledge. 
+Do additions to the existing knowledge base, don't do deletions unless you have good reason.
+Do not merely describe changes or additions - provide the entire updated knowledge base as a cohesive markdown document.
         """)
         
         kb_response = await self.llm_with_tools.ainvoke(
@@ -299,5 +311,6 @@ Generate the COMPLETE knowledge base document incorporating both existing and ne
         })
         workflow.add_edge("start_kb_exploration", "agent")
         workflow.add_edge("generate_kb", END)
+        workflow.add_edge("summarizer", END)
         
         self.app = workflow.compile(checkpointer=self.checkpointer)

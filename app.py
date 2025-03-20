@@ -151,29 +151,6 @@ for msg in current_state.get("messages", []):
         else:
             # Regular message display
             st.markdown(display_msg["content"])
-def render_markdown_with_mermaid(markdown_text):
-    # Split the content by mermaid code blocks
-    parts = re.split(r'(```mermaid[\s\S]*?```)', markdown_text)
-    
-    for part in parts:
-        if part.startswith('```mermaid'):
-            # Extract mermaid content
-            mermaid_code = part.replace('```mermaid', '').replace('```', '').strip()
-            
-            # Create HTML with mermaid
-            mermaid_html = f"""
-            <div class="mermaid">
-            {mermaid_code}
-            </div>
-            <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-            <script>mermaid.initialize({{startOnLoad:true}});</script>
-            """
-            
-            # Render HTML
-            st.components.v1.html(mermaid_html, height=300)  # Adjust height as needed
-        elif part:
-            # Render regular markdown
-            st.markdown(part)
 # Add sidebar with information and files explored
 with st.sidebar:
     st.header("About")
@@ -231,7 +208,7 @@ with st.sidebar:
     if "knowledge_base" in current_state and current_state["knowledge_base"]:
         st.success("Knowledge base has been generated!")
         with st.expander("View Knowledge Base"):
-            render_markdown_with_mermaid(current_state["knowledge_base"])
+            st.markdown(current_state["knowledge_base"])
     elif current_state.get("generating_kb", False):
         progress = current_state.get('kb_exploration_rounds', 0)
         st.info(f"Knowledge base generation in progress... ({progress} rounds completed)")
